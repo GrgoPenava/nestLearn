@@ -33,4 +33,14 @@ export class AuthController {
   googleAuthRedirect(@Req() req) {
     return req.user;
   }
+
+  @Get("github")
+  @UseGuards(AuthGuard("github"))
+  async githubAuth() {}
+
+  @Get("github/callback")
+  @UseGuards(AuthGuard("github"))
+  githubAuthRedirect(@Req() req) {
+    return req.user;
+  }
 }

@@ -1,8 +1,13 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import {
+  Injectable,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from "@nestjs/common";
 import { UserService } from "../user/user.service";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { randomUUID } from "crypto";
+import axios from "axios";
 
 @Injectable()
 export class AuthService {
@@ -15,13 +20,10 @@ export class AuthService {
     const existing = await this.userService.findByEmail(email);
 
     if (existing) {
-      // Korisnik postoji ➜ provjeri ima li već passwordHash
       if (existing.passwordHash) {
-        // Već ima password ➜ ne dozvoli ponovno registraciju
         throw new Error("Email already in use with password");
       }
 
-      // NEMA passwordHash ➜ dozvoli mu da ga sad postavi!
       const hash = await bcrypt.hash(password, 10);
       await this.userService.setPassword(existing.id, hash);
 
@@ -36,7 +38,6 @@ export class AuthService {
       return tokens;
     }
 
-    // Ako korisnik ne postoji ➜ napravi novi
     const user = await this.userService.createUser(email, password);
 
     const tokens = await this.issueTokens(user.id, user.email);
@@ -109,18 +110,15 @@ export class AuthService {
       throw new UnauthorizedException("No refresh token");
     }
 
-    // Check bcrypt
     const isValid = await bcrypt.compare(refreshToken, user.refreshTokenHash);
     if (!isValid) {
       throw new UnauthorizedException("Invalid refresh token");
     }
 
-    // ✅ Check JTI
     if (payload.jti !== user.refreshTokenJti) {
       throw new UnauthorizedException("Refresh token is revoked");
     }
 
-    // Issue new tokens with new jti
     const tokens = await this.issueTokens(user.id, user.email);
 
     await this.userService.updateRefreshToken(
@@ -140,6 +138,49 @@ export class AuthService {
       user = await this.userService.createUser(email);
     } else if (!user.providerId) {
       await this.userService.setGoogleData(user.id, profile.id);
+    }
+
+    const tokens = await this.issueTokens(user.id, user.email);
+
+    await this.userService.updateRefreshToken(
+      user.id,
+      await bcrypt.hash(tokens.refreshToken, 10),
+      tokens.jti,
+    );
+
+    return tokens;
+  }
+
+  async validateGithubLogin(profile: any, accessToken: string) {
+    const gitHubEmailApi = process.env.GITHUB_EMAIL_API;
+    if (!gitHubEmailApi) {
+      throw new ServiceUnavailableException(
+        "Github email API is not working right now",
+      );
+    }
+    const { data: emails } = await axios.get(gitHubEmailApi, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/vnd.github.v3+json",
+      },
+    });
+
+    const primaryEmail = emails.find(
+      (email: any) => email.primary && email.verified,
+    )?.email;
+
+    if (!primaryEmail) {
+      throw new UnauthorizedException(
+        "GitHub account has no verified primary email",
+      );
+    }
+
+    let user = await this.userService.findByEmail(primaryEmail);
+
+    if (!user) {
+      user = await this.userService.createUser(primaryEmail);
+    } else if (!user.providerId) {
+      await this.userService.setGithubData(user.id, profile.id);
     }
 
     const tokens = await this.issueTokens(user.id, user.email);

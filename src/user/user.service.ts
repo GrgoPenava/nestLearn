@@ -45,6 +45,13 @@ export class UserService {
     });
   }
 
+  async setGithubData(userId: number, providerId: string) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { provider: "github", providerId },
+    });
+  }
+
   findAll() {
     return this.prisma.user.findMany();
   }
